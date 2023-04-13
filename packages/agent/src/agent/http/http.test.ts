@@ -22,6 +22,8 @@ const { window } = new JSDOM(`<!DOCTYPE html><p>Hello world</p>`);
 window.fetch = global.fetch;
 (global as any).window = window;
 
+const HTTP_AGENT_HOST = 'http://localhost:4943';
+
 const DEFAULT_INGRESS_EXPIRY_DELTA_IN_MSECS = 5 * 60 * 1000;
 const REPLICA_PERMITTED_DRIFT_MILLISECONDS = 60 * 1000;
 const NANOSECONDS_PER_MILLISECONDS = 1_000_000;
@@ -99,15 +101,12 @@ test('call', async () => {
   const { calls, results } = mockFetch.mock;
   expect(calls.length).toBe(1);
   expect(requestId).toEqual(expectedRequestId);
-
-  expect(calls[0][0]).toBe(`http://localhost/api/v2/canister/${canisterId.toText()}/call`);
-  expect(calls[0][1]).toEqual({
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/cbor',
-    },
-    body: cbor.encode(expectedRequest),
-  });
+  const call1 = calls[0][0];
+  const call2 = calls[0][1];
+  expect(call1).toBe(`http://localhost/api/v2/canister/${canisterId.toText()}/call`);
+  expect(call2.method).toEqual('POST');
+  expect(call2.body).toEqual(cbor.encode(expectedRequest));
+  expect(call2.headers.get('Content-Type')).toEqual('application/cbor');
 });
 
 test.todo('query');
@@ -240,6 +239,26 @@ test('redirect avoid', async () => {
   checkUrl('https://ic0.app/foo/', 'ic0.app');
   checkUrl('https://foo.ic0.app/foo/', 'ic0.app');
 
+  // icp-api.io
+  checkUrl('https://icp-api.io', 'icp-api.io');
+  checkUrl('https://ICP-API.io', 'icp-api.io');
+  checkUrl('https://foo.icp-api.io', 'icp-api.io');
+  checkUrl('https://foo.ICP-API.io', 'icp-api.io');
+  checkUrl('https://foo.Icp-api.io', 'icp-api.io');
+  checkUrl('https://foo.bar.icp-api.io', 'icp-api.io');
+  checkUrl('https://icp-api.io/foo/', 'icp-api.io');
+  checkUrl('https://foo.icp-api.io/foo/', 'icp-api.io');
+
+  // icp-api.io
+  checkUrl('https://icp0.io', 'icp0.io');
+  checkUrl('https://ICP0.io', 'icp0.io');
+  checkUrl('https://foo.icp0.io', 'icp0.io');
+  checkUrl('https://foo.ICP0.io', 'icp0.io');
+  checkUrl('https://foo.Icp0.io', 'icp0.io');
+  checkUrl('https://foo.bar.icp0.io', 'icp0.io');
+  checkUrl('https://icp0.io/foo/', 'icp0.io');
+  checkUrl('https://foo.icp0.io/foo/', 'icp0.io');
+
   checkUrl('https://ic1.app', 'ic1.app');
   checkUrl('https://foo.ic1.app', 'foo.ic1.app');
   checkUrl('https://ic0.app.ic1.app', 'ic0.app.ic1.app');
@@ -302,37 +321,34 @@ test('use anonymous principal if unspecified', async () => {
   expect(requestId).toEqual(expectedRequestId);
 
   expect(calls[0][0]).toBe(`http://localhost/api/v2/canister/${canisterId.toText()}/call`);
-  expect(calls[0][1]).toEqual({
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/cbor',
-    },
-    body: cbor.encode(expectedRequest),
-  });
+  const call2 = calls[0][1];
+  expect(call2.method).toEqual('POST');
+  expect(call2.body).toEqual(cbor.encode(expectedRequest));
+  expect(call2.headers.get('Content-Type')).toEqual('application/cbor');
 });
 
 describe('getDefaultFetch', () => {
   it("should use fetch from window if it's available", async () => {
-    const generateAgent = () => new HttpAgent({ host: 'localhost:8000' });
+    const generateAgent = () => new HttpAgent({ host: HTTP_AGENT_HOST });
     expect(generateAgent).not.toThrowError();
   });
   it('should throw an error if fetch is not available on the window object', async () => {
     delete (window as any).fetch;
-    const generateAgent = () => new HttpAgent({ host: 'localhost:8000' });
+    const generateAgent = () => new HttpAgent({ host: HTTP_AGENT_HOST });
 
     expect(generateAgent).toThrowError('Fetch implementation was not available');
   });
   it('should throw error for defaultFetch with no window or global fetch', () => {
     delete (global as any).window;
     delete (global as any).fetch;
-    const generateAgent = () => new HttpAgent({ host: 'localhost:8000' });
+    const generateAgent = () => new HttpAgent({ host: HTTP_AGENT_HOST });
 
     expect(generateAgent).toThrowError('Fetch implementation was not available');
   });
   it('should fall back to global.fetch if window is not available', () => {
     delete (global as any).window;
     global.fetch = originalFetch;
-    const generateAgent = () => new HttpAgent({ host: 'localhost:8000' });
+    const generateAgent = () => new HttpAgent({ host: HTTP_AGENT_HOST });
 
     expect(generateAgent).not.toThrowError();
   });
@@ -473,6 +489,29 @@ describe('makeNonce', () => {
 
       expect(nonce).toBe(originalNonce);
     });
+    it.skip('should insert the nonce as a header in the request', async () => {
+      const mockFetch: jest.Mock = jest.fn((resource, init) => {
+        return Promise.resolve(
+          new Response(null, {
+            status: 200,
+          }),
+        );
+      });
+      const agent = new HttpAgent({ host: HTTP_AGENT_HOST, fetch: mockFetch });
+      const canisterId: Principal = Principal.fromText('2chl6-4hpzw-vqaaa-aaaaa-c');
+      await agent.call(canisterId, {
+        methodName: 'test',
+        arg: new ArrayBuffer(16),
+      });
+
+      expect(mockFetch).toBeCalledTimes(1);
+      const request = mockFetch.mock.calls[0][1];
+      expect(request.headers.get?.('X-IC-Request-ID')).toBeDefined();
+
+      const nonce = request.headers.get('X-IC-Request-ID');
+      expect(nonce).toBeDefined();
+      expect(nonce).toHaveLength(32);
+    });
   });
 });
 describe('retry failures', () => {
@@ -494,7 +533,7 @@ describe('retry failures', () => {
         statusText: 'Internal Server Error',
       }),
     );
-    const agent = new HttpAgent({ host: 'http://localhost:8000', fetch: mockFetch, retryTimes: 0 });
+    const agent = new HttpAgent({ host: HTTP_AGENT_HOST, fetch: mockFetch, retryTimes: 0 });
     expect(
       agent.call(Principal.managementCanister(), {
         methodName: 'test',
@@ -510,7 +549,7 @@ describe('retry failures', () => {
       });
     });
 
-    const agent = new HttpAgent({ host: 'http://localhost:8000', fetch: mockFetch });
+    const agent = new HttpAgent({ host: HTTP_AGENT_HOST, fetch: mockFetch });
     try {
       expect(
         agent.call(Principal.managementCanister(), {
@@ -540,7 +579,7 @@ describe('retry failures', () => {
       }
     });
 
-    const agent = new HttpAgent({ host: 'http://localhost:8000', fetch: mockFetch });
+    const agent = new HttpAgent({ host: HTTP_AGENT_HOST, fetch: mockFetch });
     const result = await agent.call(Principal.managementCanister(), {
       methodName: 'test',
       arg: new Uint8Array().buffer,
@@ -556,7 +595,7 @@ test('should change nothing if time is within 30 seconds of replica', async () =
   // jest.setSystemTime(systemTime);
   const mockFetch = jest.fn();
 
-  const agent = new HttpAgent({ host: 'http://localhost:8000', fetch: mockFetch });
+  const agent = new HttpAgent({ host: HTTP_AGENT_HOST, fetch: mockFetch });
 
   await agent.syncTime();
 
@@ -590,7 +629,7 @@ test('should adjust the Expiry if the clock is more than 30 seconds behind', asy
   await import('../../canisterStatus');
   const { HttpAgent } = await import('../index');
 
-  const agent = new HttpAgent({ host: 'http://localhost:8000', fetch: mockFetch });
+  const agent = new HttpAgent({ host: HTTP_AGENT_HOST, fetch: mockFetch });
 
   await agent.syncTime();
 
@@ -633,7 +672,7 @@ test('should adjust the Expiry if the clock is more than 30 seconds ahead', asyn
   await import('../../canisterStatus');
   const { HttpAgent } = await import('../index');
 
-  const agent = new HttpAgent({ host: 'http://localhost:8000', fetch: mockFetch });
+  const agent = new HttpAgent({ host: HTTP_AGENT_HOST, fetch: mockFetch });
 
   await agent.syncTime();
 
@@ -656,4 +695,44 @@ test('should adjust the Expiry if the clock is more than 30 seconds ahead', asyn
 
   expect(delay).toBe(-1 * DEFAULT_INGRESS_EXPIRY_DELTA_IN_MSECS);
   jest.resetModules();
+});
+
+test('should fetch with given call options and fetch options', async () => {
+  const mockFetch: jest.Mock = jest.fn(() => {
+    const body = cbor.encode({});
+    return Promise.resolve(
+      new Response(body, {
+        status: 200,
+      }),
+    );
+  });
+
+  const canisterId: Principal = Principal.fromText('2chl6-4hpzw-vqaaa-aaaaa-c');
+  const httpAgent = new HttpAgent({
+    fetch: mockFetch,
+    host: 'http://localhost',
+    callOptions: {
+      reactNative: { textStreaming: true },
+    },
+    fetchOptions: {
+      reactNative: {
+        __nativeResponseType: 'base64',
+      },
+    },
+  });
+
+  await httpAgent.call(canisterId, {
+    methodName: 'greet',
+    arg: new Uint8Array([]),
+  });
+
+  await httpAgent.query(canisterId, {
+    methodName: 'greet',
+    arg: new Uint8Array([]),
+  });
+
+  const { calls } = mockFetch.mock;
+
+  expect(calls[0][1].reactNative).toStrictEqual({ textStreaming: true });
+  expect(calls[1][1].reactNative.__nativeResponseType).toBe('base64');
 });
