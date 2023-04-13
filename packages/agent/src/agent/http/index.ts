@@ -23,6 +23,7 @@ import {
   makeNonce,
   QueryRequest,
   ReadRequestType,
+  SignedCallRequest,
   SubmitRequestType,
 } from './types';
 
@@ -238,6 +239,84 @@ export class HttpAgent implements Agent {
     }
     return (await this._identity).getPrincipal();
   }
+
+  public prepareCallRequest(
+    canisterId: Principal | string,
+    options: {
+      methodName: string;
+      arg: ArrayBuffer;
+      effectiveCanisterId?: Principal | string;
+    },
+    sender: Principal,
+  ): CallRequest {
+   
+    const canister = Principal.from(canisterId);
+    const ecid = options.effectiveCanisterId
+      ? Principal.from(options.effectiveCanisterId)
+      : canister;
+
+    let ingress_expiry = new Expiry(DEFAULT_INGRESS_EXPIRY_DELTA_IN_MSECS);
+
+    // If the value is off by more than 30 seconds, reconcile system time with the network
+    if (Math.abs(this._timeDiffMsecs) > 1_000 * 30) {
+      ingress_expiry = new Expiry(DEFAULT_INGRESS_EXPIRY_DELTA_IN_MSECS + this._timeDiffMsecs);
+    }
+
+    const callRequest: CallRequest = {
+      request_type: SubmitRequestType.Call,
+      canister_id: canister,
+      method_name: options.methodName,
+      arg: options.arg,
+      sender,
+      ingress_expiry,
+    };
+
+    return callRequest;
+  }
+
+  public async submitRequest(signedRequest: SignedCallRequest) {
+
+     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     let transformedRequest: any = (await this._transform({
+      request: {
+        body: null,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/cbor',
+          ...(this._credentials ? { Authorization: 'Basic ' + btoa(this._credentials) } : {}),
+        },
+      },
+      endpoint: Endpoint.Call,
+      body: signedRequest,
+    })) as HttpAgentSubmitRequest;
+
+    const body = cbor.encode(transformedRequest.body);
+
+    // Run both in parallel. The fetch is quite expensive, so we have plenty of time to
+    // calculate the requestId locally.
+
+    const ecid = signedRequest.request.canister_id;
+    const request = this._requestAndRetry(() =>
+      this._fetch('' + new URL(`/api/v2/canister/${ecid.toText()}/call`, this._host), {
+        ...transformedRequest.request,
+        body,
+      }),
+    );
+
+    const [response, requestId] = await Promise.all([request, requestIdOf(signedRequest)]);
+
+    return {
+      requestId,
+      response: {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+      },
+    };
+
+
+  };
+  
 
   public async call(
     canisterId: Principal | string,

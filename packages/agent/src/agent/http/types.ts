@@ -25,7 +25,7 @@ export interface HttpAgentBaseRequest {
 
 export interface HttpAgentSubmitRequest extends HttpAgentBaseRequest {
   readonly endpoint: Endpoint.Call;
-  body: CallRequest;
+  body: CallRequest | SignedCallRequest;
 }
 
 export interface HttpAgentQueryRequest extends HttpAgentBaseRequest {
@@ -64,6 +64,13 @@ export interface CallRequest extends Record<string, any> {
   arg: ArrayBuffer;
   sender: Uint8Array | Principal;
   ingress_expiry: Expiry;
+}
+
+
+export interface SignedCallRequest extends Record<string, any> {
+  content: CallRequest;
+  sender_pubkey: ArrayBuffer;
+  sender_sig: ArrayBuffer;
 }
 // tslint:enable:camel-case
 
