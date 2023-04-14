@@ -262,7 +262,7 @@ export class HttpAgent implements Agent {
     return (await this._identity).getPrincipal();
   }
 
-  public prepareCallRequest(
+  public async prepareCallRequest(
     canisterId: Principal | string,
     options: {
       methodName: string;
@@ -270,7 +270,7 @@ export class HttpAgent implements Agent {
       effectiveCanisterId?: Principal | string;
     },
     sender: Principal,
-  ): CallRequest {
+  ): Promise<HttpAgentSubmitRequest> {
    
     const canister = Principal.from(canisterId);
     const ecid = options.effectiveCanisterId
@@ -293,39 +293,39 @@ export class HttpAgent implements Agent {
       ingress_expiry,
     };
 
-    return callRequest;
-  }
-
-  public async submitRequest(signedRequest: SignedCallRequest) {
-
-     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-     let transformedRequest: any = (await this._transform({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let transformedRequest: any = (await this._transform({
       request: {
         body: null,
         method: 'POST',
-        headers: {
+        headers: new Headers({
           'Content-Type': 'application/cbor',
           ...(this._credentials ? { Authorization: 'Basic ' + btoa(this._credentials) } : {}),
-        },
+        }),
       },
       endpoint: Endpoint.Call,
-      body: signedRequest,
+      body: callRequest,
     })) as HttpAgentSubmitRequest;
 
-    const body = cbor.encode(transformedRequest.body);
+    return transformedRequest;
+  }
 
-    // Run both in parallel. The fetch is quite expensive, so we have plenty of time to
-    // calculate the requestId locally.
+  public async submitRequest(req: HttpAgentSubmitRequest) {
 
-    const ecid = signedRequest.request.canister_id;
+    const body = cbor.encode(req.body);
+
+    console.log("req.body: ", req.body)
+    console.log(Buffer.from(await requestIdOf(req.body.content)).toString('hex'));
+
+    const ecid = req.body.content.canister_id;
     const request = this._requestAndRetry(() =>
       this._fetch('' + new URL(`/api/v2/canister/${ecid.toText()}/call`, this._host), {
-        ...transformedRequest.request,
+        ...req.request,
         body,
       }),
     );
 
-    const [response, requestId] = await Promise.all([request, requestIdOf(signedRequest)]);
+    const [response, requestId] = await Promise.all([request, requestIdOf(req.body.content)]);
 
     return {
       requestId,
@@ -338,8 +338,6 @@ export class HttpAgent implements Agent {
 
 
   };
-  
-
   public async call(
     canisterId: Principal | string,
     options: {

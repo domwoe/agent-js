@@ -65,13 +65,6 @@ export interface CallRequest extends Record<string, any> {
   sender: Uint8Array | Principal;
   ingress_expiry: Expiry;
 }
-
-
-export interface SignedCallRequest extends Record<string, any> {
-  content: CallRequest;
-  sender_pubkey: ArrayBuffer;
-  sender_sig: ArrayBuffer;
-}
 // tslint:enable:camel-case
 
 // The types of values allowed in the `request_type` field for submit requests.
