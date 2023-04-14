@@ -25,7 +25,7 @@ export interface HttpAgentBaseRequest {
 
 export interface HttpAgentSubmitRequest extends HttpAgentBaseRequest {
   readonly endpoint: Endpoint.Call;
-  body: CallRequest | SignedCallRequest;
+  body: CallRequest;
 }
 
 export interface HttpAgentQueryRequest extends HttpAgentBaseRequest {

@@ -23,7 +23,6 @@ import {
   makeNonce,
   QueryRequest,
   ReadRequestType,
-  SignedCallRequest,
   SubmitRequestType,
 } from './types';
 
